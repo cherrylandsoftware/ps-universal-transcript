@@ -1,0 +1,49 @@
+.noprint{
+  display:none;
+}
+.rounded_block {
+  border:none;
+  padding:0px;
+  margin:0px;
+}
+.pbreak {
+  page-break-before:always;
+}
+a:visited {
+	text-decoration: none;
+	color: #000000;
+}
+a:link {
+	text-decoration: none;
+	color: #000000;
+}
+a:active {
+	text-decoration: none;
+	color: #000000;
+}
+
+body {
+  margin:0px;
+  padding:0px;
+}
+#content {
+  border: none;
+}
+/*DataTables */
+.dataTables_info {
+	display:none;
+}
+.DataTables_sort_wrapper span {
+	display:none;
+}
+.dataTables_wrapper div.fg-toolbar {
+	display:none;
+}
+.dataTables_wrapper {
+	display:block;
+}
+
+/*PS 7*/
+#header {
+  display:none;
+}

@@ -1,0 +1,29 @@
+~[SetPostValue:dateformat=MM/DD/YYYY]
+<script type="text/javascript">
+$.fn.serializeObject = function()
+{
+    var o = {};
+    var a = this.serializeArray();
+    $.each(a, function() {
+        if (o[this.name]) {
+            if (!o[this.name].push) {
+                o[this.name] = [o[this.name]];
+            }
+            o[this.name].push(this.value || '');
+        } else {
+            o[this.name] = this.value || '';
+        }
+    });
+    return o;
+};
+
+function convertOracleDF(dateformat){
+	//This function converts oracle date formats into the date format used by the jQuery UI datepicker
+	dateformat = dateformat
+		.toLowerCase()
+		.replace(/yy/g, 'y')
+		.replace(/dy/g,'D')
+		.replace(/day/g,'DD');
+	return dateformat;
+}
+</script>

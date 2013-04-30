@@ -1,0 +1,239 @@
+~[f.variable_create;name=dcidholder;type=INT;when=NEVER]
+~[f.array;name=rptstudents;fn=create;elem_type=INT]
+~[f.array;name=testlist;fn=create;elem_type=INT]
+~(f.array;name=testlist;fn=setvalue;index=1;value=~(gpv.testlist))
+~[if#ismanual.~[gpv:seloption]=manual]
+~(f.array;name=rptstudents;fn=setvalue;index=1;value=~(gpv.studentlist))
+~(f.table_info;table=students;fn=sel;*id=~(gpv.studentlist);dothisfor=all)
+[/if#ismanual]
+~[if#isall.~[gpv:seloption]=all]
+~[f.array;name=rptstudents;fn=setvalue;index=1;value=~(f.table_info;table=students;field=id;fn=value;delim=CMA;dothisfor=all)]
+[/if#isall]
+~[if#iscursel.~[gpv:seloption]=cursel]
+~[x:GetDoThisForStudents]
+~[f.array;name=rptstudents;fn=setvalue;index=1;value=~(f.table_info;table=students;field=id;fn=value;delim=CMA;dothisfor=currentsel)]
+[/if#iscursel]
+{
+
+"blank":{~[tlist_sql;SELECT 0 FROM dual]"junk":"~(f1)"[/tlist_sql]},
+"classrankmethod":"~(gpv.crmethod)",
+"gpacalcmethod":"~(gpv.gpamethod)",
+"studentdata":{
+	~[tlist_sql;
+	SELECT 
+	s.id,
+	s.lastfirst,
+	s.first_name,
+	s.last_name,
+	s.student_number,
+	s.mailing_street,
+	s.mailing_city,
+	s.mailing_state,
+	s.mailing_zip,
+	s.dob,
+	s.gender,
+	s.grade_level,
+	ps_customfields.getstudentscf(s.id,'MI_SRSD_StudentUIC') AS uic,
+	s.districtentrydate,
+	CASE WHEN s.grade_level IN (12,99) THEN 'Graduation Date' ELSE 'ClassOf' END as exitdescription,
+	CASE WHEN s.grade_level IN (12,99) THEN to_char(s.exitdate,'MM/DD/YYYY') ELSE to_char(s.classof) END as exitdate,
+	CASE WHEN s.grade_level=99 THEN s.graduated_schoolid ELSE s.schoolid END as schoolid
+	FROM students s
+	WHERE s.id IN (~[f.array;name=rptstudents;fn=value;index=ALL;delim=,]-1) 
+	ORDER BY lastfirst]
+	"sid_~(sid;l)":{
+		"lastfirst":"~(lastfirst;t)",
+		"firstname":"~(firstname;t)",
+		"lastname":"~(lastname;t)",
+		"number":"~(studentnumber;t)",
+		"address":"~(street;t)<br /> ~(city;t), ~(state;t) ~(zip;t)",
+		"dob":"~(dob;d)",
+		"gender":"~(gender;t)",
+		"gradelevel":"~(gradelevel;t;if.test=99;then=Graduated)",
+		"uic":"~(uic;t;if.test=;then=UNKNOWN)",
+		"entrydate":"~(entrydate;d)",
+		"exitdescription":"~(exitdescription;t)",
+		"exitdate":"~(exitdate;t)",
+		"schoolid":"~(schoolid;t)"
+	},
+	[/tlist_sql]"sid_-1":{}
+},
+"district":{
+	~[tlist_sql;
+	SELECT to_char(value) 
+	FROM prefs 
+	WHERE name='districtnumber'
+	AND ROWNUM<=1]
+	"number":"~(number;t)"
+	[/tlist_sql]
+},
+"schools":{
+	~[tlist_sql;
+	SELECT 
+	school_number as id,
+	CASE WHEN alternate_school_number = 0 THEN school_number ELSE alternate_school_number END as schoolnumber,
+	name,
+	schooladdress,
+	schoolcity,
+	schoolstate,
+	schoolzip,
+	schoolphone,
+	schoolfax 
+	FROM schools;]
+	"~(schoolid;t)":{
+		"number":"~(number;t)",
+		"name":"~(name;t)",
+		"address":"~(address;t)",
+		"city":"~(city;t)",
+		"state":"~(state;t)",
+		"zip":"~(zip;t)",
+		"phone":"~(phone;t)",
+		"fax":"~(fax;t)"
+	},
+	[/tlist_sql]"-1":{}
+},
+"teststructures":[
+	~[tlist_sql;
+	SELECT 
+	test.id,
+	test.name,
+	tsc.id,
+	regexp_replace(tsc.name,'^'||test.name||'_','') as scorename
+	FROM test
+	JOIN testscore tsc ON tsc.testid = test.id
+	WHERE test.id IN (~[f.array;name=testlist;fn=value;index=ALL;delim=,]-1)
+	ORDER BY test.name, tsc.sortorder]
+	{
+	"testid":"~(testid;l)",
+	"testname":"~(testname;t)",
+	"scoreid":"~(scoreid;l)",
+	"scorename":"~(scorename;t)"
+	},
+	[/tlist_sql]{}
+],
+
+"students":[
+~[duplicate;~[f.array;name=rptstudents;fn=count];qq;count;counterstart=1]
+{
+	~[f.table_info;table=students;fn=sel;dothisfor=all;*id=~[f.array;name=rptstudents;fn=value;index=qq]]
+	~[f.variable_set;name=dcidholder;value=~[f.table_info;table=students;field=[frn];fn=value;dothisfor=currentsel]]
+	"id":"~[f.array;name=rptstudents;fn=value;index=qq]",
+	"studentfrn":"~[v.dcidholder]",
+	"testscores":[
+	~[tlist_sql;
+	SELECT st.id as studenttestid,
+	test.id as testid,
+	test.name,
+	tsc.id as scoreid,
+	ltrim(ltrim(tsc.name,test.name),'_') as scorename,
+	st.test_date,
+	sts.numscore 
+	FROM test
+	JOIN testscore tsc ON tsc.testid = test.id
+	JOIN studenttest st ON st.testid = test.id
+	LEFT JOIN studenttestscore sts ON sts.studenttestid = st.id AND sts.testscoreid = tsc.id
+	WHERE st.studentid =~[f.array;name=rptstudents;fn=value;index=qq]
+	ORDER BY st.studentid, test.name,st.id, tsc.sortorder]
+	{
+	"keyid":"~(studenttestid;l)",
+	"testid":"~(testid;l)",
+	"testname":"~(testname;t)",
+	"scoreid":"~(scoreid;l)",
+	"scorename":"~(scorename;t)",
+	"testdate":"~(testdate;d)",
+	"scorevalue":"~(scoreval;t)"
+	},
+	[/tlist_sql]{}
+	],
+	"storedgrades":{
+		"rawdata":[
+		~[tlist_sql;
+			SELECT 
+			terms.id,
+			terms.name,
+			sg.schoolid,
+			sg.grade_level,
+			sg.schoolname,
+			sg.course_name,
+			sg.course_number,
+			sg.storecode,
+			sg.grade,
+			sg.earnedcrhrs,
+			NVL(c.credittype, sg.credit_type) AS credittype
+			FROM storedgrades sg
+			JOIN schools sch ON (sch.name = sg.schoolname) OR (sch.school_number = sg.schoolid)
+			JOIN terms ON terms.id = floor(sg.termid / 100) * 100 AND terms.schoolid = sch.school_number
+			LEFT JOIN courses c ON c.course_number = sg.course_number
+			WHERE sg.studentid =~[f.array;name=rptstudents;fn=value;index=qq]
+			AND sg.potentialcrhrs >0
+			AND (c.Sched_Do_Not_Print IS NULL OR c.Sched_Do_Not_Print = 0)
+			~[if#glfilter.~[gpv:glfilter]=1]
+			AND sg.grade_level BETWEEN ~[gpv:histlow] AND ~[gpv:histhigh]
+			[/if#glfilter]
+			ORDER BY sg.studentid, sg.grade_level, sg.termid, sg.schoolname, sg.storecode,sg.course_name]
+		{
+		"termid":"~(termid;l)",
+		"termname":"~(termname;t)",
+		"schoolid":"~(schoolid;l)",
+		"gradelevel":"~(gradelevel;t)",
+		"schoolname":"~(schoolname;t)",
+		"coursename":"~(coursename;t)",
+		"coursenumber":"~(coursenumber;t)",
+		"storecode":"~(storecode;t)",
+		"grade":"~(grade;t)",
+		"earnedcredit":"~(earnedcrhrs;t)",
+		"credittype":"~(credit_type;t)"
+		},
+		[/tlist_sql]{}],
+		"termbins":[
+		~[tlist_sql;
+			SELECT DISTINCT
+			terms.id AS termid,
+			sg.schoolname,
+			sg.storecode
+			FROM storedgrades sg
+			JOIN schools sch ON (sch.name = sg.schoolname) OR (sch.school_number = sg.schoolid)
+			JOIN terms ON terms.id = floor(sg.termid / 100) * 100 AND terms.schoolid = sch.school_number
+			LEFT JOIN courses c ON c.course_number = sg.course_number
+			WHERE sg.studentid =~[f.array;name=rptstudents;fn=value;index=qq]
+			AND sg.potentialcrhrs >0
+			ORDER BY termid, schoolname, storecode]
+		{
+		"termid":"~(termid;l)",
+		"schoolname":"~(schoolname;t)",
+		"name":"~(termbin;t)"
+		},
+		[/tlist_sql]{}]
+	},
+	"gradreqs":[
+	~[tlist_sql;
+		SELECT 
+		gr.sortorder,
+		gr.name,
+		gr.reqcrhrs,
+		gr.coursesource,
+		CASE
+		WHEN gr.coursesource = 'group' THEN dbms_lob.substr( gen.valueT, 4000, 1 )
+		WHEN gr.coursesource = 'credittype' THEN gr.credittype
+		WHEN gr.coursesource = 'listed' THEN dbms_lob.substr( gr.courselistt, 4000, 1 )
+		WHEN gr.coursesource = 'any' THEN 'any'
+		ELSE 'any'
+		END AS sourcedata
+		FROM gradreqsets grs
+		JOIN gradreq gr ON gr.gradreqsetid = grs.gradreqsetid
+		JOIN students s ON s.gradreqsetid = grs.gradreqsetid
+		LEFT JOIN gen ON gen.cat = 'coursegroups' AND gen.name = gr.coursegroup AND gen.schoolid = gr.schoolid
+		WHERE s.id =~[f.array;name=rptstudents;fn=value;index=qq]
+		AND gen.valueli <>1
+		ORDER BY sortorder]
+	{
+		"sortorder":"~(sortorder;t)",
+		"name":"~(name;t)",
+		"requiredcredits":"~(reqcrhrs)",
+		"earnedcredits":"",
+		"coursesource":"~(coursesource;t)",
+		"sourcedata":"~(sourcedata;t)"
+	},[/tlist_sql]{}]
+},
+~[if#last.~[f.array;name=rptstudents;fn=count]=qq]{}]}[/if#last]
+[/duplicate]

@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html>
+<head>
+<!--[CRM BEGIN]-->
+<title>Universal Transcript</title>
+<meta name="author" content="PDS" />
+<meta name="description" content="Universal Transcript" />
+<meta name="version" content="2.0.0" />
+<meta name="requirepref" content="allow_expanded_tlist_sql:true" />
+<meta name="preview" content="transcript_preview.html" />
+<!--[CRM END]-->
+<link href="/images/css/screen.css" rel="stylesheet" media="screen">
+<link href="/images/css/print.css" rel="stylesheet" media="print">
+<link rel="stylesheet" href="/images/css/theme/crm-css/jquery-ui.custom.css" type="text/css">
+<link rel="stylesheet" href="/admin/includes/template/reports-common.css" type="text/css" media="all">
+<link rel="stylesheet" href="/admin/includes/template/reports-printable.css" type="text/css" media="print">
+
+~[wc:commonscripts]
+~[x:insertfile;/scripts/custom-jquery-1.0.html]
+~[x:insertfile;/admin/includes/template/reports-commonscripts.html]
+<script type="text/javascript">
+var g_data;
+var g_testtables;
+
+$(function(){
+	if($('#testlist option').length ==0){
+		$('#testlist').parent().hide();
+	}
+	$('#formblock').accordion({collapsible:true,autoHeight:false});
+	$('#radio1').buttonset();
+	$('#fs_template input:checkbox').button();
+	$('input:submit').button({text:"Submit"});
+	$('#radio1').click(function(){
+		$('#seloption1').is(':checked') ? $('#studentlist').show() : $('#studentlist').hide();
+	});
+	$('#optshowcomment').click(function(){
+		if($('label[for=optshowcomment]').hasClass('ui-state-active')){
+			$('.t-block-comment').show().removeClass('noprint');
+		}
+		else{
+			$('.t-block-comment').hide().addClass('noprint');
+		}
+	});
+	$('#optshowcrsummary').click(function(){
+		if($('label[for=optshowcrsummary]').hasClass('ui-state-active')){
+			$('.t-block-credit').show().removeClass('noprint');
+		}
+		else{
+			$('.t-block-credit').hide().addClass('noprint');
+		}
+	});
+	$('#optshowtemplate').click(function(){
+		$('label[for=optshowtemplate]').hasClass('ui-state-active') ? $('#templatecontainer').show() : $('#templatecontainer').hide();
+	});
+	$('#customfooterentry').change(function(){
+		$('#customfooter').text($(this).val());
+		
+	})
+	$('#showcustomfooter').click(function(){
+		if($('label[for=showcustomfooter]').hasClass('ui-state-active')){
+			$('#customfooter').show().removeClass('noprint');
+		}
+		else{
+			$('#customfooter').hide().addClass('noprint');
+		}
+	});
+	
+	$('#params').submit(function(){
+		saveTranscriptPrefs(); //save preferences for parameter form
+		$("#reportresult").html("<span id='loadingimg'>Loading <img src='" +$("#busyimage").attr("src")+"' /></span>");
+		var settings = $('#params').serializeObject();
+		var seloption = $("input[name='seloption']:checked").val();
+		var scount = 0;
+		var slist = $('#studentlist :selected').map(function(){scount++; return this.value;}).get();
+		var testlist = $('#testlist :selected').map(function(){return this.value;}).get();
+		var classrankmethod = $('#crmethod :selected').val();
+		var gpacalcmethod = $('#gpamethod :selected').val();
+		var options={"seloption":seloption, "studentlist":[slist], "testlist":[testlist], "crmethod":classrankmethod, "gpamethod":gpacalcmethod};
+		if(settings.seloption=='manual' && scount> 1000){
+			displayError('Manual selection of more than 1000 students is not supported.');
+			return false;
+		}
+		else if (settings.seloption=='manual' && scount==0){
+			displayError('At least one student must be selected');
+			return false;
+		}
+		else if(settings.seloption=='cursel'){
+			$.extend(settings, {dothisfor:"selected"});
+		}
+		options = $.extend( settings, options);
+		$.ajax({
+			url:"transcript_helperjson.html",
+			type: "GET",
+			beforeSend: function(x){
+				if(x && x.overrideMimeType){
+					x.overrideMimeType("application/j-son;charset=UTF-8");
+				}
+			},
+			dataFilter:function(data){
+				data = data.replace(/[\r\n]/g, '');
+				return data;
+			},
+			traditional:true,
+			dataType:"json",
+			cache:false,
+			data: options,
+			error: function(xhr, status, error){
+				var msg = 'Failed to retrieve transcript data.';
+				displayError(msg);
+			},
+			success:parseResults
+		});
+
+		return false; //override regular form submission
+	});
+});//end jquery.ready
+function displayError(msg){
+	$('#reportresult').html('<div id="alertmsg" style="padding: 0pt 0.7em;" class="ui-state-error ui-corner-all"><p><span style="float: left; margin-right: 0.3em;" class="ui-icon ui-icon-alert"></span><strong>Alert: </strong>'+msg+'</p></div>');
+}
+function saveTranscriptPrefs(){
+	var p= {"ac":"prim"};
+	$('#params .pref').each(function(idx, item){
+		var val = $(this).val()
+		if(item.type =="checkbox"){
+			val = $(item).is(':checked') ? 1 :0
+		}
+		p[$(this).attr('name')] = val;
+	});
+	$.post('/admin/changesrecorded.white.html', p);
+}
+function parseResults(data){
+	g_data= data;
+	g_data.students.pop();
+	g_data.teststructures.pop();
+	g_testtables = createTestItemTables(g_data.teststructures);
+	$.each(g_data.students, function(sidx, student){
+		student.storedgrades.rawdata.pop();
+		student.gradreqs.pop();
+		organizeStoredGrades(student.storedgrades);
+		calcGradRequirements(student.storedgrades.rawdata, student.gradreqs);
+		createTranscript(student);
+	});
+	$('#loadingimg').remove();
+}
+function organizeStoredGrades(sg){
+//take the stored grades raw data and create an object that can be looped through with future logic
+	sg.transcript = {terms:{}};
+	$.each(sg.rawdata, function(idx, obj){
+		if(sg.transcript.terms[obj.termid] ==undefined){sg.transcript.terms[obj.termid]={name:obj.termname, schools:{}};}
+		if(sg.transcript.terms[obj.termid].schools[obj.schoolname] ==undefined){sg.transcript.terms[obj.termid].schools[obj.schoolname] ={name:obj.schoolname,gradelevel:obj.gradelevel,grades:[]};}
+		sg.transcript.terms[obj.termid].schools[obj.schoolname].grades.push(obj);
+	});
+}
+
+function calcGradRequirements(storedgrades, gradreqs){
+/*This function replicates the logic used on PowerSchool's graduation progress screen.
+-Credit requirements are processed based on the requirement sort order.
+-If a stored grade has extra earned credit than what the current requirement needs, then the excess credit is held onto so that it can be applied to other credit requirements.
+*/
+	var m_grades =  $.extend(true, [], storedgrades);//deep copy stored grades array
+	$.each(gradreqs, function(ridx, req){
+		req.requiredcredits = parseFloat(req.requiredcredits);
+		req.earnedcredits = 0.0;
+		if(req.coursesource == 'group' || req.coursesource == 'listed'){
+			var courselist = req.sourcedata.split(',');
+			m_grades = $.grep(m_grades, function(item, i){
+				item.earnedcredit = parseFloat(item.earnedcredit);
+				if($.inArray(item.coursenumber, courselist) == -1){return true;}
+				if((req.earnedcredits+item.earnedcredit) >req.requiredcredits){
+					//earned credit is more than what is required.  deduct required and keep the storedgrade data
+					item.earnedcredit = item.earnedcredit - (req.requiredcredits - req.earnedcredits);
+					req.earnedcredits = req.requiredcredits;
+					return true;
+				}
+				else{
+					req.earnedcredits += item.earnedcredit;
+					return false; //remove the stored grade
+				}
+			});				
+		}
+		else if (req.coursesource == 'credittype'){
+			m_grades = $.grep(m_grades, function(item, i){
+				item.earnedcredit = parseFloat(item.earnedcredit);
+				if(item.credittype != req.sourcedata){return true;}
+				if((req.earnedcredits+item.earnedcredit) >req.requiredcredits){
+					//earned credit is more than what is required.  deduct required and keep the storedgrade data
+					item.earnedcredit = item.earnedcredit - (req.requiredcredits - req.earnedcredits);
+					req.earnedcredits = req.requiredcredits;
+					return true;
+				}
+				else{
+					req.earnedcredits += item.earnedcredit;
+					return false; //remove the stored grade
+				}
+			});
+		}
+		else if (req.coursesource =='any'){
+			m_grades = $.grep(m_grades, function(item, i){
+				item.earnedcredit = parseFloat(item.earnedcredit);
+				if((req.earnedcredits+item.earnedcredit) >req.requiredcredits){
+					//earned credit is more than what is required.  deduct required and keep the storedgrade data
+					item.earnedcredit = item.earnedcredit - (req.requiredcredits - req.earnedcredits);
+					req.earnedcredits = req.requiredcredits;
+					return true;
+				}
+				else{
+					req.earnedcredits += item.earnedcredit;
+					return false; //remove the stored grade
+				}
+			});
+		}
+	});
+	//take the leftover stored grades and display them as 'Additional' credits
+	var extracredits = 0;
+	$.each(m_grades, function(i, item){extracredits+= parseFloat(item.earnedcredit);});
+	gradreqs.push({"name":"Additional Credits","requiredcredits":"-","earnedcredits":extracredits});
+	var blah = 1;
+}
+String.prototype.lpad = function(len, pad){
+	var str = this;
+	if(len+1 >=str.length){
+		str= Array(len + 1 - str.length).join(pad) + str;
+	}
+	return str;
+}
+function createTranscript(student){
+	var linesPerColumn = 52;
+	var col = 1;
+	var studentinfo = g_data.studentdata['sid_'+student.id];
+	var $t = $('#templatecontainer .page').clone();  //get a copy of the template page
+	$t.removeClass('noprint');
+
+	//fill schoolinfo
+	var schoolinfo = g_data.schools[g_data.studentdata['sid_'+student.id].schoolid];
+	$t.find('.ph-schoolname').text(schoolinfo.name);
+	$t.find('.ph-schooladdress').text(schoolinfo.address);
+	$t.find('.ph-schoolcity').text(schoolinfo.city);
+	$t.find('.ph-schoolstate').text(schoolinfo.state);
+	$t.find('.ph-schoolzip').text(schoolinfo.zip);
+	$t.find('.ph-schoolphone').text(schoolinfo.phone);
+	$t.find('.ph-schoolfax').text(schoolinfo.fax);
+	$t.find('.ph-buildingcode').text(schoolinfo.number.lpad(5,'0'));
+	//fill district info
+	$t.find('.ph-districtcode').text(g_data.district.number);
+	//fill student data
+	$t.find('.ph-lastfirst').text(studentinfo.lastfirst);
+	$t.find('.ph-uic').text(studentinfo.uic);
+	$t.find('.ph-gradelevel').text(studentinfo.gradelevel);
+	$t.find('.ph-gender').text(studentinfo.gender);
+	$t.find('.ph-dob').text(studentinfo.dob);
+	$t.find('.ph-address').html(studentinfo.address);
+	$t.find('.ph-entrydate').text(studentinfo.entrydate);
+	$t.find('.ph-exitdescription').text(studentinfo.exitdescription);
+	$t.find('.ph-exitdate').text(studentinfo.exitdate);
+	//cumulative data
+	$t.find('.ph-gpa').attr('id','gpa'+student.studentfrn).html('Loading GPA... <img src="' +$("#busyimage").attr("src")+'" />');
+	$t.find('.ph-ecr').attr('id','ecr'+student.studentfrn).html('Loading Earned Credits... <img src="' +$("#busyimage").attr("src")+'" />');
+	$t.find('.ph-classrank').attr('id','classrank'+student.studentfrn).html('Loading Class Rank... <img src="' +$("#busyimage").attr("src")+'" />');
+	getCumulativeData(student.studentfrn);
+	//earned credit summary
+	var $cr_row_template = $('.t-cr-row', $t).clone();
+	$('.t-cr-row', $t).remove();
+	$.each(student.gradreqs, function(gidx, req){
+		var $cr_row = $cr_row_template.clone();
+		$cr_row.find('.ph-crname').text(req.name);
+		$cr_row.find('.ph-crrequired').text(isNaN(req.requiredcredits) ? req.requiredcredits : parseFloat(req.requiredcredits).toFixed(3));
+		if(req.coursesource =='credittype'){
+			$cr_row.find('.ph-crtype').text(req.sourcedata);
+		}
+		else{
+			$cr_row.find('.ph-crtype').text('');
+		}
+		$cr_row.find('.ph-crearned').text(isNaN(req.earnedcredits) ? req.earnedcredits : parseFloat(req.earnedcredits).toFixed(3));
+		$t.find('.t-cr-table tbody').append($cr_row);
+	});
+	//tests
+	$t.find('.t-ts-table').remove();
+	var m_testtables = {};
+	$.each(student.testscores, function(idx, testscore){
+		var $tbl;
+		if(m_testtables[testscore.testid] ==undefined && g_testtables[testscore.testid] != undefined){
+			m_testtables[testscore.testid] = g_testtables[testscore.testid].clone();
+			$tbl = m_testtables[testscore.testid];
+		}
+		else if(m_testtables[testscore.testid] !=undefined){$tbl = m_testtables[testscore.testid];}
+		else{return;}
+		var keyname = 'scorekey'+testscore.keyid;
+		$scoreph = $tbl.find('#'+keyname);
+		if($scoreph.length==0){
+			$scoreph = $tbl.find('#scorekeytemplate').clone();
+			$scoreph.attr('id', keyname);
+			$scoreph.find('.ph-tscoredate').text(testscore.testdate);
+			$tbl.find('tbody').append($scoreph);	
+		}
+		$scoreph.find('.ph-scoreid-'+testscore.scoreid).text(testscore.scorevalue);
+	});
+	$.each(m_testtables, function(idx, $tbl){
+		$tbl.find('#scorekeytemplate').remove();
+		$t.find('.t-block-testinfo').append($tbl);
+	});
+	if($t.find('.t-block-testinfo table').length==0){$t.find('.t-block-testinfo').remove();}
+	//stored grades 
+	var $sg_table_template = $t.find('.t-sg-table').clone();
+	var $sg_rowhead_template = $('.t-sg-rowheader', $t).clone();
+	$t.find('.t-sg-table').remove();
+	$.each(student.storedgrades.transcript.terms, function(tidx, sgterm){
+		$.each(sgterm.schools, function(sidx, sgschool){
+			var rowcount = $t.find('.col'+col+ ' tr').length;
+			var $sg_table_base = $sg_table_template.clone();
+			//set the header and number of columns for the table template
+			$sg_table_base.find('.ph-yearschool').html(sgschool.name +', '+sgterm.name + '  Grade ' +sgschool.gradelevel );
+			//dynamically generate the required number of termbin columns
+			$termbin_header_template = $sg_table_base.find('.t-termbin-header');
+			$termbin_value_template = $sg_table_base.find('.t-termbin');
+			$.each(student.storedgrades.termbins, function(idx, termbin){
+				if(termbin.schoolname == sgschool.name && termbin.termid ==tidx){
+					var $tbhnew = $termbin_header_template.clone();
+					$tbhnew.text(termbin.name);
+					var $tbnew = $termbin_value_template.clone();
+					$tbnew.find('.ph-termbin-X').removeClass('ph-termbin-X').addClass('ph-termbin-'+termbin.name).html('&nbsp;');
+					$termbin_value_template.before($tbnew)
+					$termbin_header_template.before($tbhnew);
+				}
+			});
+			
+			$termbin_header_template.remove();
+			$termbin_value_template.remove();
+			var $sg_row_template = $sg_table_base.find('.t-sg-row', $t).clone();
+			$sg_table_base.find('.t-sg-row', $t).remove();
+			var $sg_table = $sg_table_base.clone(); //Make another copy of the table now that the headers are set. This is in case the table needs to flow into extra columns.
+			
+			if((rowcount+2)> linesPerColumn){col+=1; rowcount=0}//make sure there is room for the header and at least one detail row
+
+			$.each(sgschool.grades, function(gidx, sg){
+				var key = 'key' + sg.schoolname + sg.termid + sg.coursename;
+				var $sg_row;
+				$sg_table.find('.t-sg-row').each(function(){
+					if($(this).data('key') ==key){
+						$sg_row = $(this);//found a matching row for combining grades/credits
+						return;
+					}
+				});
+				if($sg_row==undefined) {
+					$sg_row = $sg_row_template.clone();
+					rowcount+=1;//only increment row count when creating a new row
+				}
+				//populate row data. 
+				$sg_row.data('key', key);
+				$sg_row.find('.ph-sgcourse').html(sg.coursename);//.html for encoding special characters in coursename
+				$sg_row.find('.ph-termbin-'+sg.storecode).text(sg.grade);
+				var curcredits = 0.0 + parseFloat($sg_row.find('.ph-sgcredit').text());
+				$sg_row.find('.ph-sgcredit').text((parseFloat(sg.earnedcredit) + curcredits).toFixed(3));
+				$sg_row.find('.ph-sgcredittype').text(sg.credittype);
+				
+				//determine if adding this row requires overflow into the next column
+				if((rowcount)> linesPerColumn){
+					$t.find('.col'+col).append($sg_table);
+					col+=1;
+					rowcount=1;
+					$sg_table = $sg_table_base.clone(); //get a new empty table with the modified header rows
+					$t.find('.col'+col).append($sg_table);
+				}
+				$sg_table.find('tbody').append($sg_row);
+			});
+			//Append table to the current column, add an extra row count due to table's bottom margin
+			rowcount+=1;
+			$t.find('.col'+col).append($sg_table);
+		});
+	});
+	
+	//reposition summary blocks to the end of the 2nd column
+	$t.find('.t-block-credit,.t-block-summary,.t-block-testinfo').each(function(){
+		$(this).appendTo($t.find('.col2'));
+	});
+	
+	//page break
+	if($('#reportresult .page').length >0){
+		$('#reportresult').append('<hr class="noprint pageseperator" /><div class="pbreak"><span style="display: none">&nbsp;</span></div>');
+	}
+	$t.appendTo('#reportresult');
+}
+function createTestItemTables(testinfo){
+	var $template = $('#templatecontainer .page')
+	var tables ={};
+	var $tbl;
+	var $tbl_template = $template.find('.t-ts-table').clone();
+	
+	$.each(testinfo, function(idx, item){
+		if(tables[item.testid] == undefined){
+			$tbl = $tbl_template.clone();
+			$tbl.find('.ph-testname').text(item.testname);
+			tables[item.testid] = $tbl;
+		}
+		$tbl = tables[item.testid];
+		
+		//create a new column header for the score item
+		var $ch_template = $tbl.find('#dynamic-ts-colhead');
+		var $ch = $ch_template.clone();
+		$ch.text(item.scorename).removeAttr('id');
+		$ch_template.before($ch);
+		//create a new column in the row template to hold the item scores
+		var $cr_template = $tbl.find('#dynamic-ts-col');
+		var $cr = $cr_template.clone();
+		$cr.text(item.scorename).removeAttr('id');
+		$cr.removeClass('ph-scoreid-X').addClass('ph-scoreid-'+item.scoreid);
+		$cr_template.before($cr);
+	});
+	$.each(tables, function(idx, $table){
+		$table.find('#dynamic-ts-col').remove();
+		$table.find('#dynamic-ts-colhead').remove();
+		$table.find('.ph-testname').attr('colspan', $table.find('.t-ts-row td').length);
+		
+	});
+	return tables;
+}
+function getCumulativeData(studentfrn){
+	$.ajax({
+		url:"transcript_helper2.html",
+		type:"GET",
+		data:{frn:studentfrn, crmethod:g_data.classrankmethod,gpamethod:g_data.gpacalcmethod },
+		dataType:"json",
+		success:function(data){
+			$('#ecr'+data.sfrn).html(data.earnedcredit);
+			$('#gpa'+data.sfrn).html(data.gpa);
+			$('#classrank'+data.sfrn).html(data.classrank);
+
+		}
+	});
+}
+</script>
+
+<style type="text/css" media="all">
+body {
+  line-height:1em;
+}
+.clear {
+  clear:both;
+}
+.center {
+  text-align:center;
+}
+.left {
+  text-align:left;
+}
+hr.pageseperator {
+  border: 2px dashed #F00;
+}
+.infotable {
+  border-collapse:collapse;
+  width:100%;
+}
+.infotable td {
+  font-weight:bold;
+  border:1px solid;
+  font-size:10px;
+}
+.t-fielddesc {
+  font-weight:normal;
+}
+
+.page {
+  padding: .2in 0.25in;
+  width:8in;
+}
+.t-page-header {
+  margin: 0.2in 0in;
+  width:100%;
+}
+.t-body {
+  height:7.2in;
+  width:100%;
+  margin:0px;
+}
+.t-footer {
+  margin-top:0.2in;
+  height:1.5in;
+  width:100%;
+}
+
+.t-column {
+  border: 1px solid #000;
+  width:50%;
+  height:100%;
+  vertical-align:top;
+  padding:0px;
+}
+.t-block-header {
+  text-align:center;
+  font-weight:bold;
+  font-size:10pt;
+  background-color:#E9E9E9;
+}
+
+.rounded_block {
+  background-color: #FFFFFF;
+  border: 1px solid #BFD4EC;
+  -webkit-border-radius: 6px;
+  -moz-border-radius:6px;
+  padding:5px;
+}
+
+.t-block-studentinfo {
+  width:2.5in;
+}
+
+.t-block-centralheader {
+  text-align:center;
+  vertical-align:top;
+}
+.t-block-centralheader span{
+  margin-top:0px;
+  font-weight:bold;
+  font-size:12pt;
+  font-family:Arial;
+}
+.t-block-schoolinfo {
+  font-weight:bold;
+  font-size:11px;
+  width:2.5in;
+  vertical-align:top;
+}
+.t-block-schoolinfo span{
+  padding-left:10px;
+}
+
+.t-block-summary, .t-block-credit, .t-block-testinfo  {
+  width:100%;
+  border-width:1px;
+  border-color:#000;
+  border-top-style:solid;
+  margin:-1px 0px 2px;
+}
+
+.t-block-comment {
+  width:100%;
+  height:5em;
+  border:1px solid #000;
+  font-size:10px;
+}
+.t-block-signature {
+  float:left;
+  font-size:10px;
+}
+.coltable {
+  border-collapse:collapse;
+  width:100%;
+  margin: 0 0 7pt 0;
+}
+.coltable td{
+  padding:0 2px;
+  font-size:10px;
+}
+.coltable th{
+  font-size:7pt;
+  font-weight:bold;
+  border:1px solid #000;
+  border-left-style:none;
+  border-right-style:none;
+}
+.t-sg-table tbody {
+  border:none;
+}
+.t-sg-table tr  td{
+  font-size:7pt;
+  line-height:8pt;
+}
+.t-sg-rowheader, .t-ts-rowheader {
+  font-weight:bold;
+  background-color:#E9E9E9;
+  text-align:center;
+  border:1px solid #000;
+  border-left-style:none;
+  border-right-style:none;
+}
+
+#params td {
+  vertical-align:top;
+}
+</style>
+<style type="text/css" media="print">
+#usercontext-bar {
+  display:none;
+}
+.noprint {
+  display:none;
+}
+.rounded_block {
+  border:none;
+  padding:0px;
+  margin:0px;
+}
+body {
+  margin:0px;
+  padding:0px;
+}
+.pbreak {
+  page-break-before:always;
+}
+.t-block-header {
+  background-color:#EEEEEE;
+}
+</style>
+</head>
+<body bgcolor="#ffffff">
+~[x:insertfile;/admin/includes/template/admin_reportheader_start.html]
+ Universal Transcript
+~[x:insertfile;/admin/includes/template/admin_reportheader_end.html]
+<img id="busyimage" style="display:none;" src="/images/busy_blue.gif" />
+
+<div id="reportcontent" class="rounded_block">
+<!-- title -->
+<span class="header noprint"><font color="#C20000" size="5">&nbsp;&nbsp;Universal Transcript</font></span>
+<!-- title -->
+<!-- Begin report parameters-->
+<form class="noprint"  name="params" id="params" method="GET" action="#" target="_new">
+<div id="formblock" class="noprint">
+	<h3><a href="#">Report Parameters</a></h3>
+	<div id="params_container">
+		<div>
+			<span class="bold">Students...</span><br />
+			<div id="radio1">
+			<input type="radio" name="seloption" id="seloption1" value="manual" checked="checked" /><label for="seloption1">Manual Selection</label>
+			<input type="radio" name="seloption" id="seloption2" value="cursel" ~[if.~[x:studsinset]>999]disabled="1"[/if]/><label for="seloption2">Current Selection (~[x:studsinset])</label>
+			<input type="radio" name="seloption" id="seloption3" value="all" /><label for="seloption3">All Students</label>
+			</div>
+			<select id="studentlist" name="studentlist" size="10" multiple="" >
+			~[tlist_sql;
+			SELECT DISTINCT s.id, s.lastfirst
+			FROM students s
+			JOIN storedgrades sg ON sg.studentid = s.id
+			WHERE sg.potentialcrhrs >0
+			~[if.is.a.school]AND s.schoolid = ~(curschoolid)[/if]
+			ORDER BY s.lastfirst;]
+			<option value=~(id;l) >~(name;t)</option>[/tlist_sql]
+			</select>
+		</div>
+		<div>
+			<fieldset>
+			<legend class="bold">Calculation Options</legend>
+			<span class="bold">Class Rank Method...</span>
+			<select id="crmethod" name="[prefyearschool]ut_classrankmethod" class="pref">
+				<option value="none" />None</option>
+				~[tlist_sql;SELECT DISTINCT name, CASE WHEN '~[displayprefyearschool:ut_classrankmethod]'=name THEN 1 ELSE 0 END as sel  FROM gen WHERE cat='classrankmethod' and name IS NOT NULL and schoolid = ~(curschoolid)]
+				<option value="~(name;t)" ~(f2;l;if.test=1;then=selected="selected";else=)>~(name;t)</option>
+				[/tlist_sql]
+			</select>
+			<br />
+			<span class="bold">GPA Calculation Method...</span>
+			<select id="gpamethod" name="[prefyearschool]ut_gpacalcmethod" class="pref">
+				<option value="" />None</option>
+				~[tlist_sql;SELECT DISTINCT name, CASE WHEN '~[displayprefyearschool:ut_gpacalcmethod]'=name THEN 1 ELSE 0 END as sel FROM gen WHERE cat='gpacalcmethod' and name IS NOT NULL]
+				<option value="~(name;t)" ~(f2;l;if.test=1;then=selected="selected";else=)>~(name;t)</option>
+				[/tlist_sql]
+			</select>
+			<br />
+			<input type="checkbox" id="param_glfilter" name="glfilter" value="1" checked="checked" /><label class="bold" for="param_glfilter">Use grade level filter:</label>
+	~[tlist_sql;SELECT MAX(hist_low_grade), MAX(hist_high_grade) FROM schools;]
+			<input type="text" id="param_histlow" name="histlow" value="~(lowg;t)" size="3" />
+			Thru
+			<input type="text" id="param_histhigh" name="histhigh" value="~(highg;t)" size="3" />
+	[/tlist_sql]
+			</fieldset>
+		</div>
+		<div>
+			<span class="bold">Tests...</span><br />
+			<select id="testlist" name="testlist" size="8" multiple="" >
+			~[tlist_sql;SELECT id, name FROM test]
+			<option value="~(id;l)" ~(name;t;if.test=ACT;then=selected="selected";else.if=SAT;then=selected="selected";else.if=PSAT;then=selected="selected";else=)>~(name;t)</option>
+			[/tlist_sql]
+			</select>
+		</div>
+		<div>
+			<fieldset id="fs_template">
+			<legend class="bold">Template Options</legend>
+			<input type="checkbox" name="optshowtemplate" id="optshowtemplate" value="1" /><label for="optshowtemplate">Show Template</label><br />
+			<input type="checkbox" name="[prefyearschool]ut_showcommentblock" id="optshowcomment" value="1" checked="checked" class="pref" /><label for="optshowcomment">Include Comment Block</label><br />
+			<input type="checkbox" name="[prefyearschool]ut_showcreditsummary" id="optshowcrsummary" value="1" checked="checked" class="pref" /><label for="optshowcrsummary">Include Credit Summary</label><br />
+			<input type="checkbox" name="[prefyearschool]ut_showcustomfooter" id="showcustomfooter" value="1" class="pref" /><label for="showcustomfooter">Include custom footer</label>
+			<br />
+			<textarea name="[prefyearschool]ut_customfootertext" id="customfooterentry" rows="4" cols="80" class="pref"></textarea>
+			</fieldset>
+		</div>
+	<br />
+	<input type="hidden" name="ac" value="prim" />
+	<input value="Submit" type="submit">
+
+</div><!--End param container -->
+</div><!-- end report parameters -->
+</form>
+<!--BEGIN TEMPLATE-->
+<div id="templatecontainer" style="display:none;" class="noprint">
+<div class="noprint page rounded_block">
+<table class="t-page-header">
+<tr>
+	<td class="t-block-studentinfo">
+	<table  class="infotable" border="1" cellspacing="0" cellpadding="2">
+	<tbody>
+	<tr>
+		<td ><span class="t-fielddesc">Student Name</span><br /><span class="ph-lastfirst">%StudentName%</span></td>
+		<td colspan="2"><span class="t-fielddesc">Date of Birth</span><br /><span class="ph-dob">%DoB%</span></td>
+	<tr>
+		<td width="50%"><span class="t-fielddesc">UIC</span><br /><span class="ph-uic">%StudentUIC%</span></td>
+		<td width="25%"><span class="t-fielddesc">Grade</span><br /><span class="ph-gradelevel">%Grade%</span></td>
+		<td width="25%"><span class="t-fielddesc">Gender</span><br /><span class="ph-gender">%Gender%</span></td>
+	</tr>
+	<tr><td colspan="3"><span class="t-fielddesc">Address</span><br /><span class="ph-address">%StudentAddress%</span></td></tr>
+	</tbody>
+	</table>
+
+	</td>
+
+	<td class="t-block-centralheader">
+	<span class="ph-schoolname">%SchoolName%</span><br />
+	<span>OFFICIAL TRANSCRIPT</span><br />
+	</td>
+	<td class="t-block-schoolinfo">
+		<span class="ph-schoolname">%SchoolName%</span><br />
+		<span class="ph-schooladdress">%SchoolAddress%</span><br />
+		<span class="ph-schoolcity">%City%</span>,<span class="ph-schoolstate">%State%</span><span class="ph-schoolzip">%Zip%</span><br />
+		<span class="t-fielddesc">Tel: </span><span class="ph-schoolphone">%SchoolPhone%</span><br />
+		<span class="t-fielddesc">Fax: </span><span class="ph-schoolfax">%SchoolFax%</span><br />
+		<span class="t-fielddesc">District Code: </span><span class="ph-districtcode"></span><br />
+		<span class="t-fielddesc">Building Code: </span><span class="ph-buildingcode"></span><br />
+	</td>
+</tr>
+</table>
+
+<table class="t-body" style="table-layout:fixed;" cellspacing="0" cellpadding="0">
+<tr>
+<td class="t-column col1">
+	<table cellspacing="0" class="t-sg-table coltable">
+		<thead>
+		<tr class="t-sg-rowheader"><td class="ph-yearschool" colspan="10">Year/School Name Here</td></tr>
+		<tr>
+		<th >Course</th>
+		<th style="text-align:left;" class="t-termbin-header">MarkN...</th>
+		<th >Credit</th>
+		<th >CrType</th>
+		</tr>
+		</thead>
+		<tbody>
+		<tr class="t-sg-row">
+		<td><span width="60%" class="ph-sgcourse">CourseName</span></td>
+		<td style="text-align:left;" class="t-termbin"><span class="ph-termbin-X">GradeN...</span></td>
+		<td class="center"><span class="ph-sgcredit">0.0</span></td>
+		<td class="center"><span class="ph-sgcredittype">CrType</span></td>
+		</tr>
+		</tbody>
+	</table>
+
+</td>
+<td class="t-column col2">
+	<div class="t-block-testinfo">
+		<div class="t-block-header">Testing Information</div>
+		<table cellspacing="0"  class="t-ts-table coltable">
+			<thead>
+			<tr class="t-ts-rowheader"><td class="ph-testname" colspan="10">Test Name</td></tr>
+			<tr >
+			<th>Date</th>
+			<th id="dynamic-ts-colhead" class="t-testscore-header">ScoreNameX...</th>
+			</tr>
+			</thead>
+			<tbody>
+			<tr id="scorekeytemplate" class="t-ts-row">
+			<td><span class="ph-tscoredate">Date</span></td>
+			<td id="dynamic-ts-col" class="center"><span class="ph-scoreid-X">ScoreX...</span></td>
+			</tr>
+			</tbody>
+		</table>
+	</div>
+	<div class="t-block-credit">
+		<div class="t-block-header">Credit Summary</div>
+		<table cellspacing="0" width="100%" class="t-cr-table coltable">
+			<thead>
+			<tr>
+			<th width="60%">Requirement</th>
+			<th>CrType</th>
+			<th>Req</th>
+			<th>Earned</th>
+			</tr>
+			</thead>
+			<tbody>
+			<tr class="t-cr-row">
+			<td><span width="60%" class="ph-crname">%RequirementName%</span></td>
+			<td class="center"><span class="ph-crtype">%CrType%</span></td>
+			<td class="center"><span class="ph-crrequired">%ReqCrHrs%</span></td>
+			<td class="center"><span class="ph-crearned">%EarnedCrHrs%</span></td>
+			</tr>
+			</tbody>
+		</table>
+	</div>
+	<div class="t-block-summary">
+		<div class="t-block-header">Summary</div>
+		<table cellspacing="0" cellpadding="2" border="1" class="infotable coltable">
+		<tr>
+		<td><span class="t-fielddesc">GPA</span><br /><span class="ph-gpa">%GPA%</span></td>
+		<td><span class="t-fielddesc">Class Rank</span><br /><span class="ph-classrank">%ClassRank%</span></td>
+		<td><span class="t-fielddesc">Earned Credits</span><br /><span class="ph-ecr">%EarnedCredits%</span></td>
+		</tr>
+		<tr>
+		<td><span class="t-fielddesc">District Entry Date</span><br /><span class="ph-entrydate">%EntryDate%</span></td>
+		<td colspan="2"><span class="t-fielddesc ph-exitdescription">%ExitDescription%</span><br /><span class="ph-exitdate">%ExitDate%</span></td>
+		</tr>
+		</table>
+	</div>
+</td><!--end column2-->
+</tr>
+</table>
+
+<div class="t-footer">
+	<div style="clear:both;">&nbsp;</div>
+	<div class="t-block-comment"><span class="t-fielddesc">&nbsp;&nbsp;Comments:</span></div>
+	<div class="t-block-signature">
+		<span class="t-fielddesc">Transcript is unofficial unless signed by a school official.</span><br /><br />
+		<span style="float:left;">Official's Signature:</span><div style="float:left;width:3in;border-bottom:1px solid #000;">&nbsp;</div>
+		<span>&nbsp;&nbsp;Date:~[date]</span>
+		<div style="clear:both;">&nbsp;</div>
+	</div>
+	<div style="clear:both;">&nbsp;</div>
+	<div id="customfooter">~[displayprefyearschool:ut_customfootertext]</div>
+</div>
+</div>
+</div>
+<!--END TEMPLATE -->
+<!-- start report result content -->
+<div id="reportresult" class="rounded_block"></div><!-- end report result -->
+</div><!-- end main content -->
+</div><!--end container-->
+</body>
+</html>
